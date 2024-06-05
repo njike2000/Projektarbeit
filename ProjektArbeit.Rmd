@@ -1,0 +1,338 @@
+---
+title: "Untitled"
+output: html_document
+date: "2024-05-07"
+---
+
+
+## Load libary
+```{r}
+library(dplyr)
+library(readr)
+library(tidyr)
+
+#install.packages("textmineR")
+#install.packages("tm")
+#install.packages("lsa")
+#install.packages("rpart")
+#install.packages("rpart.plot")
+#install.packages("party")
+#install.packages("party")
+#install.packages("party", dependencies = TRUE)
+
+
+
+
+
+library(lsa)
+library(tm)
+library(textmineR)
+library(data.table)
+library(rpart)
+library(rpart.plot)
+
+
+```
+
+
+
+
+
+##Data import und cleaning
+```{r}
+# Load necessary libraries
+library(rpart)
+library(rpart.plot)
+
+# Define the URLs of the datasets
+urls <- c(
+  "https://raw.githubusercontent.com/njike2000/Candy-Analysis/main/Recording/worldmodel.0.csv",
+  "https://raw.githubusercontent.com/njike2000/Candy-Analysis/main/Recording/worldmodel.1.csv",
+  "https://raw.githubusercontent.com/njike2000/Candy-Analysis/main/Recording/worldmodel.2.csv",
+  "https://raw.githubusercontent.com/njike2000/Candy-Analysis/main/Recording/worldmodel.3.csv"
+)
+
+# Import datasets with specified names and remove columns 14 to 32
+initial1 <- read.csv(urls[1], dec = ".")[]
+initial <- read.csv(urls[1], dec = ".")[,-(14:32)]
+corner1 <- read.csv(urls[2], dec = ".")[]
+corner <- read.csv(urls[2], dec = ".")[,-(14:32)]
+ballIn1 <- read.csv(urls[3], dec = ".")[]
+ballIn <- read.csv(urls[3], dec = ".")[,-(14:32)]
+kickIn1 <- read.csv(urls[4], dec = ".")[]
+kickIn <- read.csv(urls[4], dec = ".")[,-(14:32)]
+
+# Add "setPlay" column to all datasets
+add_setPlay_column <- function(dataset, setPlay_values) {
+  dataset$setPlay <- as.integer(rep(setPlay_values, length.out = nrow(dataset)))
+  dataset <- dataset[, c(1, ncol(dataset), 2:(ncol(dataset)-1))]
+  return(dataset)
+}
+
+corner <- add_setPlay_column(corner, 0:5)
+ballIn <- add_setPlay_column(ballIn, 0:5)
+kickIn <- add_setPlay_column(kickIn, 0:5)
+
+# Entfernen der 14. Spalte aus jedem Datensatz, um sie einheitlich zu machen
+corner <- corner[, -14]
+ballIn <- ballIn[, -14]
+initial <- initial[, -14]
+kickIn <- kickIn[, -2]
+
+# Combine datasets into a list
+datasets <- list(initial = initial, corner = corner, ballIn = ballIn, kickIn = kickIn)
+
+# Function to generate random values based on the range of each column in the original dataset
+generate_random_values <- function(dataset) {
+  for (col in colnames(dataset)) {
+    if (is.numeric(dataset[[col]])) {
+      dataset[20, col] <- runif(1, min(dataset[[col]], na.rm = TRUE), max(dataset[[col]], na.rm = TRUE))
+    } else if (is.factor(dataset[[col]])) {
+      dataset[20, col] <- sample(levels(dataset[[col]]), 1)
+    } else if (is.character(dataset[[col]])) {
+      dataset[20, col] <- sample(unique(dataset[[col]]), 1)
+    }
+  }
+  return(dataset)
+}
+
+# Function to generate negative datasets based on a condition and fill NA values
+generate_negative_dataset <- function(original_data, condition_col, condition_value) {
+  negative_data <- original_data
+  negative_data[20, condition_col] <- condition_value
+  negative_data <- generate_random_values(negative_data)
+  return(negative_data)
+}
+
+# Generate the negative datasets based on the specified conditions
+negative_datasets <- list(
+  goal_kick = generate_negative_dataset(corner, "setPlay", 1),
+  corner_kick = generate_negative_dataset(corner, "setPlay", 3),
+  distanceToBall_500 = generate_negative_dataset(kickIn, "ballDistanceToBot", 500),
+  distanceToBall_5000 = generate_negative_dataset(kickIn, "ballDistanceToBot", 5000),
+  distanceToBall_1500 = generate_negative_dataset(kickIn, "ballDistanceToBot", 1500),
+  robotNumber_goalie = generate_negative_dataset(ballIn, "robotNumber", 1),
+  robotNumber_attacker = generate_negative_dataset(initial, "robotNumber", 5),
+  BallIsNear_0 = generate_negative_dataset(initial, "ballIsNear", 0),
+  BallIsNear_1 = generate_negative_dataset(initial, "ballIsNear", 1)
+)
+
+# Combine all datasets into a single data frame
+combine_datasets <- function(original_datasets, negative_datasets) {
+  combined_data <- do.call(rbind, c(original_datasets, negative_datasets))
+  return(combined_data)
+}
+
+# List of original datasets
+original_datasets <- list(initial, corner, ballIn, kickIn)
+
+# Combine all datasets
+all_data <- combine_datasets(original_datasets, negative_datasets)
+
+# Set the specified columns to factors with appropriate labels
+#all_data$gameState <- factor(all_data$gameState, levels = 0:4, labels = c("initial", "ready", "set", "playing", "finished"))
+#all_data$setPlay <- factor(all_data$setPlay, levels = 0:5, labels = c("None", "Goal_kick", "pushing_free_kick", "corner_kick", "kick_in", "Penalty_kick"))
+#all_data$robotNumber <- factor(all_data$robotNumber, levels = 1:5, labels = c("goalie", "defender_1", "defender_2", "midfielder", "attacker"))
+
+# Create a new column "category" in all_data
+all_data$category <- ifelse(row.names(all_data) %in% row.names(negative_datasets[[1]])[21] |
+                              row.names(all_data) %in% row.names(original_datasets[[1]])[20],
+                            1, 0)
+
+# Generate 500 more rows of data (100 positive and 400 negative examples)
+generate_additional_data <- function(dataset, n_positive = 100, n_negative = 400) {
+  # Generate positive examples
+  positive_data <- dataset[sample(nrow(dataset), n_positive, replace = TRUE), ]
+  positive_data$category <- 1
+  
+  # Generate negative examples
+  negative_data <- dataset[sample(nrow(dataset), n_negative, replace = TRUE), ]
+  negative_data$category <- 0
+  
+  additional_data <- rbind(positive_data, negative_data)
+  return(additional_data)
+}
+
+additional_data <- generate_additional_data(all_data)
+
+# Combine the additional data with the original all_data
+all_data <- rbind(all_data, additional_data)
+```
+
+
+
+##Implementing the PCA Modell
+
+```{r}
+
+#remove.packages("cli")
+#install.packages("cli")
+
+library(dplyr)
+library(ggplot2)
+library(FactoMineR) # For PCA
+library(factoextra) # For visualizing PCA
+
+# Convert `category` column to a factor with appropriate labels
+all_data$category <- factor(all_data$category, levels = c(0, 1), labels = c("NoTriggerPoint", "TriggerPoint"))
+
+# Ensure all necessary columns are numeric
+numeric_columns <- all_data %>% 
+  select(timeLeft, ballDistanceToBot, distanceToGoal, ballPosition.X, ballPosition.Y, robotPose.X, robotPose.Y, gameState, setPlay, robotNumber)
+
+# Standardize the numeric data
+numeric_columns_scaled <- scale(numeric_columns)
+
+# Perform PCA
+pca_result <- PCA(numeric_columns_scaled, graph = FALSE)
+
+# Custom palette for variables
+variable_colors <- c("timeLeft" = "#FF6347", "ballDistanceToBot" = "#4682B4", "distanceToGoal" = "#DA70D6", 
+                     "ballPosition.X" = "#32CD32", "ballPosition.Y" = "#FFD700", "robotPose.X" = "#1E90FF", 
+                     "robotPose.Y" = "#FF4500", "gameState" = "#7B68EE", "setPlay" = "#00FA9A", 
+                     "robotNumber" = "#8A2BE2")
+
+# Visualize the PCA results with custom colors for variables and categories
+pca_biplot <- fviz_pca_biplot(pca_result, 
+                              geom.ind = "point",
+                              geom.var = c("arrow", "text"),
+                              col.var = variable_colors,
+                              habillage = all_data$category,
+                              addEllipses = TRUE,
+                              ellipse.level = 0.95,
+                              title = "PCA Biplot for Trigger Points")
+
+# Print the PCA biplot
+print(pca_biplot)
+
+# Save the PCA biplot to a file
+ggsave("PCA_Biplot_TriggerPoints.png", plot = pca_biplot, width = 10, height = 7)
+
+
+
+
+
+```
+
+
+
+
+##Implementing the Decision Tree
+
+```{r}
+
+
+
+
+
+
+
+# Laden der notwendigen Bibliotheken
+library(rpart)
+library(rpart.plot)
+
+# Funktion zum Importieren und Bereinigen des Datensatzes
+import_and_clean_data <- function(url, setPlay_values = NULL) {
+  # Daten importieren
+  data <- read.csv(url, dec = ".")[, -c(14:32)]
+  
+  # Fügen Sie die setPlay-Spalte hinzu, wenn Werte bereitgestellt werden
+  if (!is.null(setPlay_values)) {
+    data$setPlay <- as.integer(rep(setPlay_values, length.out = nrow(data)))
+    data <- data[, c(1, ncol(data), 2:(ncol(data)-1))]
+  }
+  
+  # Kategorische Werte für gameState, setPlay und robotNumber zuordnen
+  data$gameState <- factor(data$gameState, levels = 0:4, labels = c("initial", "ready", "set", "playing", "finished"))
+  data$setPlay <- factor(data$setPlay, levels = 0:5, labels = c("None", "Goal_kick", "pushing_free_kick", "corner_kick", "kick_in", "Penalty_kick"))
+  data$robotNumber <- factor(data$robotNumber, levels = 1:5, labels = c("goalie", "defender_1", "defender_2", "midfielder", "attacker"))
+  
+  return(data)
+}
+
+# Definieren der URLs der Datensätze
+urls <- c(
+  "https://raw.githubusercontent.com/njike2000/Candy-Analysis/main/Recording/worldmodel.0.csv",
+  "https://raw.githubusercontent.com/njike2000/Candy-Analysis/main/Recording/worldmodel.1.csv",
+  "https://raw.githubusercontent.com/njike2000/Candy-Analysis/main/Recording/worldmodel.2.csv",
+  "https://raw.githubusercontent.com/njike2000/Candy-Analysis/main/Recording/worldmodel.3.csv"
+)
+
+# Importieren und Bereinigen der Datensätze
+initial <- import_and_clean_data(urls[1])
+corner <- import_and_clean_data(urls[2], 0:5)
+ballIn <- import_and_clean_data(urls[3], 0:5)
+kickIn <- import_and_clean_data(urls[4], 0:5)
+
+# Entfernen der 14. Spalte aus jedem Datensatz, um sie einheitlich zu machen
+corner <- corner[, -14]
+ballIn <- ballIn[, -14]
+initial <- initial[, -14]
+kickIn <- kickIn[, -2]
+
+# Sicherstellen, dass alle Datensätze dieselben Spaltennamen und dieselbe Reihenfolge haben
+common_colnames <- colnames(initial)
+corner <- corner[, common_colnames]
+ballIn <- ballIn[, common_colnames]
+kickIn <- kickIn[, common_colnames]
+
+# Kombinieren der Datensätze in eine Liste
+datasets <- list(initial = initial, corner = corner, ballIn = ballIn, kickIn = kickIn)
+
+# Funktion zum Erweitern negativer Daten
+augment_negative_data <- function(negative_data, num_samples) {
+  negative_data <- na.omit(negative_data)  # Entfernen von Zeilen mit NA-Werten
+  augmented_data <- negative_data[rep(1:nrow(negative_data), length.out = num_samples), ]
+  
+  # Leichtes Variieren der erweiterten Daten (optional: kleine Zufallsrauschen zu numerischen Spalten hinzufügen)
+  numeric_cols <- sapply(augmented_data, is.numeric)
+  augmented_data[numeric_cols] <- augmented_data[numeric_cols] + 
+    matrix(runif(sum(numeric_cols) * nrow(augmented_data), -0.01, 0.01), nrow = nrow(augmented_data))
+  
+  return(augmented_data)
+}
+
+# Anzahl der benötigten Stichproben, um mindestens 500 Zeilen zu erreichen
+num_samples <- 500
+
+# Erweitern negativer Daten für jeden Datensatz
+augmented_datasets <- lapply(datasets, function(dataset) {
+  augmented_negative_data <- augment_negative_data(dataset[-nrow(dataset), ], num_samples)
+  augmented_negative_data$Data_category <- "Negative"
+  dataset$Data_category <- "Positive"
+  combined_data <- rbind(augmented_negative_data, dataset)
+  return(combined_data)
+})  
+
+# Kombinieren aller erweiterten Datensätze in einen
+combined_data <- do.call(rbind, augmented_datasets)
+
+# Hinzufügen einer Spalte zur Angabe des Szenarios
+combined_data$scenario <- rep(c("Initial", "Corner", "BallIn", "KickIn"), each = nrow(datasets[[1]]))
+
+# Erstellen des Entscheidungsbaummodells mit setPlay als Hauptknoten
+model_trigger_point <- rpart(Data_category ~ setPlay + timeLeft + robotNumber + ballDistanceToBot + gameState + distanceToGoal + ballPosition.X + ballPosition.Y  , 
+                             data = combined_data, method = "class", control = rpart.control(cp = 0.0001, minsplit = 20, maxdepth = 10))
+
+# Anpassen des Komplexitätsparameters und Beschneiden des Entscheidungsbaums
+model_trigger_point$cptable[,"CP"] <- pmax(model_trigger_point$cptable[,"CP"], 0.01)
+pruned_model_trigger_point <- prune(model_trigger_point, cp = 0.01)
+
+# Visualisieren des beschnittenen Entscheidungsbaummodells
+options(repr.plot.width = 8, repr.plot.height = 8)
+rpart.plot(pruned_model_trigger_point, box.palette = "RdBu", shadow.col = "gray", nn = TRUE, main = "Beschnittener Entscheidungsbaum für Triggerpunkt", extra = 101)
+
+# Vorhersagen der Kategorie im Testdatensatz
+combined_data$predicted_setPlay <- predict(pruned_model_trigger_point, newdata = combined_data, type = "class")
+
+
+```
+
+
+
+
+
+
+
+
+
